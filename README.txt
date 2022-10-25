@@ -1,8 +1,8 @@
-Notes:
+Raytracer for CSCD18 Assignment
 
- * Don't forget to complete the autotester_id.txt
- * If you have done any crunchy work, put your rendered images (in .jpg format, good resolution)
-   along with a text file describing your crunchy features in a .zip file called 'crunchy.zip'
-   and submit that along with the remaning requested files and/or renders.
-
+In order to make a picture:
+1. Open buildScene.c and add objects as desired
+2. Run ./compile.sh on your local machine
+3. Run ./Raytracer [number of pixels per dimension] 0 [Name of output file].ppm
+4. Open [Name of output file].ppm to see picture
  
