@@ -33,7 +33,7 @@
 
  // Note the parameters: ra, rd, rs, rg, R, G, B, alpha, r_index, and shinyness)
 
- o=newSphere(.2,.95,.35,.35,1,.25,.25,1,1,6);		// Initialize a sphere
+ o=newSphere(.2,.95,.35,.35,.3,1,.25,.25,1,1.52,6);		// Initialize a sphere
  Scale(o,1.5,.75,.75);					// Apply a few transforms (Translate * Rotate * Scale)
  RotateZ(o,PI/4);					
  Translate(o,2.0,2.5,1.5);
@@ -52,41 +52,117 @@
 								// way, the cleanup function already provided will do
 								// this at the end.
  
- insertObject(o,&object_list);	// <-- If you don't insert the object into the object list,
+ //loadTexture(o,"texture.ppm",1,&texture_list);
+ //insertObject(o,&object_list);	// <-- If you don't insert the object into the object list,
 								// nothing happens! your object won't be rendered.
 
  // That's it for defining a single sphere... let's add a couple more objects
- o=newSphere(.2,.95,.75,.75,.75,.95,.55,1,1,6);
- Scale(o,.95,1.65,.65);
- RotateZ(o,-PI/1.5);
- Translate(o,-2.2,1.75,1.35);
+ o=newSphere(.2,.95,.75,.75,0.5,.75,.95,.55,1,1,6);
+ Scale(o,.75,.75,.75);
+ Translate(o,-2.2,4.75,2.35);
  invert(&o->T[0][0],&o->Tinv[0][0]);
+ //loadTexture(o,"./Texture/fourSquare.ppm",1,&texture_list);
+ loadTexture(o,"./Texture/normalbrick.ppm",2,&texture_list);
  insertObject(o,&object_list);
 
- //Cylinder just for testing purposes
- o=newCyl(.2,.95,.75,.75,.75,.95,.55,1,1,6);
- Scale(o,2,2,2);
- RotateX(o, PI/4);
+ o=newSphere(.2,.95,.75,.75,0.75,.3,.5,.75,1,1,6);
+ Scale(o,.75,.75,.75);
+ Translate(o,2.2,4.75,2.35);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ loadTexture(o,"./Texture/sky.ppm",1,&texture_list);
+ insertObject(o,&object_list);
+
+ o=newSphere(.2,.95,.75,.75,0.75,.35,.75,.35,0.2,1.1,6);
+ Translate(o,1.4,1.15,1.35);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ insertObject(o,&object_list);
+ 
+ o=newSphere(.9,.95,.75,.75,0.75,.35,.75,.35,1,1,6);
+ Scale(o, 0.25, 0.25, 0.25);
+ Translate(o,1.4,1.15,1.35);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ loadTexture(o,"./Texture/sky.ppm",1,&texture_list);
+ insertObject(o,&object_list);
+ 
+ o=newSphere(.2,.95,.75,.75,0.75,.95,.15,.55,0.2,1.1,6);
+ Translate(o,-1.4,1.15,1.35);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ insertObject(o,&object_list);
+ 
+ o=newSphere(.9,.95,.75,.75,0.75,.95,.15,.55,1,1,6);
+ Scale(o, 0.25, 0.25, 0.25);
+ Translate(o,-1.4,1.15,1.35);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ loadTexture(o,"./Texture/sky.ppm",1,&texture_list);
+ insertObject(o,&object_list);
+ 
+ o=newSphere(.2,.95,.75,.75,0.75,.95,.15,.55,0.1,1.52,6);
+ Scale(o, 0.55, 0.55, 0.55);
+ Translate(o,0,0.05,1.35);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ insertObject(o,&object_list);
+ 
+ o=newCyl(.2,.95,.75,.75,.3,.75,.95,.55,1,1,6);
+ Scale(o,2,2,4);
+ RotateX(o, PI/2);
+ RotateY(o, PI/2);
  Translate(o,0,2,6);
  invert(&o->T[0][0],&o->Tinv[0][0]);
- //insertObject(o,&object_list);
+ loadTexture(o, "./Texture/fourSquare.ppm", 1, &texture_list);
+ loadTexture(o, "./Texture/normalbrick.ppm", 2, &texture_list);
+ insertObject(o,&object_list);
 
- o=newPlane(.2,.75,.25,.05,.55,.8,.75,1,1,2);
+ o=newPlane(.2,.75,.25,.05,.3,.55,.8,.75,1,1,2);
  Scale(o,11,11,11);
  RotateZ(o,PI/4);
  RotateX(o,PI/2);
  Translate(o,0,-4,5);
  invert(&o->T[0][0],&o->Tinv[0][0]);
+ loadTexture(o, "./Texture/wood.ppm", 1, &texture_list);
+ insertObject(o,&object_list);
+ 
+ o=newPlane(.2,.75,.25,.05,.3,1,.1,.1,1,1,2);
+ Scale(o,11,11,11);
+ RotateY(o,-PI/4);
+ Translate(o,-7,7,13);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ loadTexture(o, "./Texture/bump1.ppm", 1, &texture_list); 
+ insertObject(o,&object_list);
+ 
+ o=newPlane(.2,.75,.25,.05,.3,.1,1,.1,1,1,2);
+ Scale(o,11,11,11);
+ RotateY(o,PI/4);
+ Translate(o,7,7,13);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ loadTexture(o, "./Texture/bump1.ppm", 2, &texture_list);
  insertObject(o,&object_list);
 
- // Insert a single point light source. We set up its position as a point structure, and specify its
- // colour in terms of RGB (in [0,1]).
- p.px=0;
- p.py=25.5;
- p.pz=-3.5;
- p.pw=1;
- l=newPLS(&p,.95,.95,.95);
- insertPLS(l,&light_list);
+ o=newImplicit(&implicitChubbs, &implicitChubbsNormal, .2,.95,.75,.75,.3,.75,.95,.55,1,1,6);
+ Scale(o,.95,1.65,.65);
+ RotateZ(o,-PI/1.5);
+ RotateX(o, PI);
+ Translate(o,0,3,2.35);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ //insertObject(o,&object_list);
+ //Implicit objects cannot have textures yet
+
+ o=newImplicit(&implicitTangleCube, &implicitTangleCubeNormal,.2,.95,.75,.75,.3,.75,.95,.55,1,1,6);
+ Scale(o,2,2,2);
+ RotateY(o, PI/4);
+ RotateX(o, PI/4);
+ Translate(o, 2, 1, 8);
+ invert(&o->T[0][0],&o->Tinv[0][0]);
+ //insertObject(o,&object_list);
+
+ //Area Light Source
+ o=newSphere(1,0,0,0,0,1,1,1,1,1,1);
+ Scale(o, 5, 5, 5);
+ Translate(o, 0, 25.5, -3.5);
+ invert(&o->T[0][0], &o->Tinv[0][0]);
+ o->isLightSource = 1;
+ insertObject(o, &object_list);
+ l=newALS(o);
+ insertPLS(l, &light_list);
 
  // End of simple scene for Assignment 2
  // Keep in mind that you can define new types of objects such as cylinders and parametric surfaces,

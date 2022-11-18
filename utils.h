@@ -23,7 +23,12 @@
 #ifndef __utils_header
 #define __utils_header
 
-#define PRECISION 0.0001
+#define min(A,B) ((A)>(B)?(B):(A))
+#define abs(A) ((A)>0?(A):(-A))
+
+#define PRECISION 0.00001
+#define RAYMARCHMAX 10
+#define LAMBDAINCREMENT 0.2
 
 // Functions to apply transformations to objects.
 // If you add any transformations to the list below, document them carefully
@@ -172,6 +177,7 @@ inline double length(struct point3D *a)
 // Functions to instantiate primitives
 struct point3D *newPoint(double px, double py, double pz);
 struct pointLS *newPLS(struct point3D *p0, double r, double g, double b);
+struct pointLS *newALS(struct object3D *obj);
 
 // Ray management inlines
 inline void rayPosition(struct ray3D *ray, double lambda, struct point3D *pos)
@@ -201,37 +207,63 @@ void normalTransform(struct point3D *n_orig, struct point3D *n_transformed, stru
 
 // Functions to create new objects, one for each type of object implemented.
 // You'll need to add code for these functions in utils.c
-struct object3D *newPlane(double ra, double rd, double rs, double rg, double r, double g, double b, double alpha, double R_index, double shiny);
-struct object3D *newSphere(double ra, double rd, double rs, double rg, double r, double g, double b, double alpha, double R_index, double shiny);
-struct object3D *newCyl(double ra, double rd, double rs, double rg, double r, double g, double b, double alpha, double R_index, double shiny);
+struct object3D *newPlane(double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double R_index, double shiny);
+struct object3D *newSphere(double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double R_index, double shiny);
+struct object3D *newCyl(double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double R_index, double shiny);
+struct object3D *newImplicit(void (*implicit)(struct point3D *point, double *value), void (*normal)(struct point3D *p, struct point3D *n), double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double R_index, double shiny);
 
 // Functions to obtain surface coordinates on objects
 void planeCoordinates(struct object3D *plane, double a, double b, double *x, double *y, double *z);
 void sphereCoordinates(struct object3D *plane, double a, double b, double *x, double *y, double *z);
 void sphereNormal(struct object3D *sphere, double a, double b, double *x, double *y, double *z);
-void cylCoordinates(struct object3D *plane, double a, double b, double *x, double *y, double *z);
+void cylCoordinates(struct object3D *cyl, double a, double b, double *x, double *y, double *z);
+void implicitCoordinates(struct object3D *implicit, double a, double b, double *x, double *y, double *z);
 void planeSample(struct object3D *plane, double *x, double *y, double *z);
 void sphereSample(struct object3D *plane, double *x, double *y, double *z);
 void cylSample(struct object3D *plane, double *x, double *y, double *z);
+void implicitSample(struct object3D *implicit, double *x, double *y, double *z);
+void CSGCoorinates(struct objectBTree *root, double *lambda1, double *lambda2);
+
+// Functions that define implicit surfaces
+// Add more functions here for more implicit surfaces
+void implicitSphere(struct point3D *point, double *value);
+void implicitSphereNormal(struct point3D *point, struct point3D *normal);
+void implicitChubbs(struct point3D *point, double *value);
+void implicitChubbsNormal(struct point3D *point, struct point3D *normal);
+void implicitTangleCube(struct point3D *point, double *value);
+void implicitTangleCubeNormal(struct point3D *point, struct point3D *normal);
 
 // Functions to compute intersections for objects.
 // You'll need to add code for these in utils.c
 void planeIntersect(struct object3D *plane, struct ray3D *r, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b);
 void sphereIntersect(struct object3D *sphere, struct ray3D *r, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b);
 void cylIntersect(struct object3D *cylinder, struct ray3D *r, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b);
+void implicitIntersect(struct object3D *cylinder, struct ray3D *r, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b);
+
+// Functions to compute where the ray intersects with the objects
+void planeIntersectPoints(struct object3D *plane, struct ray3D *r, struct point3D *p1, struct point3D *p2);
+void sphereIntersectPoints(struct object3D *plane, struct ray3D *r, struct point3D *p1, struct point3D *p2);
+void cylIntersectPoints(struct object3D *plane, struct ray3D *r, struct point3D *p1, struct point3D *p2);
 
 // Functions to texture-map objects
 // You will need to add code for these if you implement texture mapping.
 void loadTexture(struct object3D *o, const char *filename, int type, struct textureNode **t_list);
 void texMap(struct image *img, double a, double b, double *R, double *G, double *B);
+void normalMap(struct image *img, double a, double b, double *x, double *y, double *z);
 void alphaMap(struct image *img, double a, double b, double *R, double *G, double *B);
 
 // Functions to insert objects and lights into their respective lists
 void insertObject(struct object3D *o, struct object3D **list);
 void insertPLS(struct pointLS *l, struct pointLS **list);
+void insertALS(struct areaLS *a, struct areaLS **list);
 void addAreaLight(double sx, double sy, double nx, double ny, double nz,\
                   double tx, double ty, double tz, int lx, int ly,\
                   double r, double g, double b, struct object3D **o_list, struct pointLS **l_list);
+
+// Functions to modify the stack
+void push(struct objStack *objstack, double index);
+double pop(struct objStack *objstack);
+double peek(struct objStack *objstack);
 
 // Function to set up the camera and viewing coordinate frame.
 // You will have to add code to this function's body in utils.c

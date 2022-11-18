@@ -80,8 +80,29 @@ struct pointLS *newPLS(struct point3D *p0, double r, double g, double b)
   ls->col.R=r;					// Store light source colour and
   ls->col.G=g;					// intensity
   ls->col.B=b;
+  ls->isObj = 0;				//Set the light source to point light source
  }
  return(ls);
+}
+
+struct pointLS *newALS(struct object3D *obj){
+	struct pointLS *as=(struct pointLS *)calloc(1,sizeof(struct pointLS));
+	if(!as) fprintf(stderr,"Out of memory allocating light source!\n");
+	else
+	{
+		memcpy(&as->obj,obj,sizeof(struct object3D));	// Copy light source object
+		as->isObj = 1;			//Set the light source to area light source
+	}
+	return(as);
+}
+
+
+//Helper function to compute the value of a ray at a given lambda
+void computePoint(struct ray3D *r, double lambda, struct point3D *output){
+	struct point3D value = r->d;
+	scalarMultVector(&value, lambda);
+	addVectors(&r->p0, &value);
+	*output = value;
 }
 
 /////////////////////////////////////////////
@@ -154,7 +175,7 @@ void insertObject(struct object3D *o, struct object3D **list)
  }
 }
 
-struct object3D *newPlane(double ra, double rd, double rs, double rg, double r, double g, double b, double alpha, double r_index, double shiny)
+struct object3D *newPlane(double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double r_index, double shiny)
 {
  // Intialize a new plane with the specified parameters:
  // ra, rd, rs, rg - Albedos for the components of the Phong model
@@ -176,6 +197,7 @@ struct object3D *newPlane(double ra, double rd, double rs, double rg, double r, 
   plane->alb.rd=rd;
   plane->alb.rs=rs;
   plane->alb.rg=rg;
+  plane->alb.rt=rt;
   plane->col.R=r;
   plane->col.G=g;
   plane->col.B=b;
@@ -196,13 +218,12 @@ struct object3D *newPlane(double ra, double rd, double rs, double rg, double r, 
   plane->normalMapped=0;
   plane->isCSG=0;
   plane->isLightSource=0;
-  plane->CSGnext=NULL;
   plane->next=NULL;
 }
  return(plane);
 }
 
-struct object3D *newSphere(double ra, double rd, double rs, double rg, double r, double g, double b, double alpha, double r_index, double shiny)
+struct object3D *newSphere(double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double r_index, double shiny)
 {
  // Intialize a new sphere with the specified parameters:
  // ra, rd, rs, rg - Albedos for the components of the Phong model
@@ -223,6 +244,7 @@ struct object3D *newSphere(double ra, double rd, double rs, double rg, double r,
   sphere->alb.rd=rd;
   sphere->alb.rs=rs;
   sphere->alb.rg=rg;
+  sphere->alb.rt=rt;
   sphere->col.R=r;
   sphere->col.G=g;
   sphere->col.B=b;
@@ -243,12 +265,11 @@ struct object3D *newSphere(double ra, double rd, double rs, double rg, double r,
   sphere->normalMapped=0;
   sphere->isCSG=0;
   sphere->isLightSource=0;
-  sphere->CSGnext=NULL;
   sphere->next=NULL; }
  return(sphere);
 }
 
-struct object3D *newCyl(double ra, double rd, double rs, double rg, double r, double g, double b, double alpha, double r_index, double shiny)
+struct object3D *newCyl(double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double r_index, double shiny)
 {
  ///////////////////////////////////////////////////////////////////////////////////////
  // TO DO:
@@ -266,6 +287,7 @@ struct object3D *newCyl(double ra, double rd, double rs, double rg, double r, do
   cylinder->alb.rd=rd;
   cylinder->alb.rs=rs;
   cylinder->alb.rg=rg;
+  cylinder->alb.rt=rt;
   cylinder->col.R=r;
   cylinder->col.G=g;
   cylinder->col.B=b;
@@ -286,12 +308,66 @@ struct object3D *newCyl(double ra, double rd, double rs, double rg, double r, do
   cylinder->normalMapped=0;
   cylinder->isCSG=0;
   cylinder->isLightSource=0;
-  cylinder->CSGnext=NULL;
   cylinder->next=NULL; }
  return(cylinder);
 }
 
+struct object3D *newImplicit(void (*distance)(struct point3D *point, double *value), void (*normal)(struct point3D *p, struct point3D *n), double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double R_index, double shiny)
+{
+	struct object3D *implicit=(struct object3D *)calloc(1,sizeof(struct object3D));
+   if (!implicit) fprintf(stderr,"Unable to allocate new cylinder, out of memory!\n");
+ else
+ {
+  implicit->alb.ra=ra;
+  implicit->alb.rd=rd;
+  implicit->alb.rs=rs;
+  implicit->alb.rg=rg;
+  implicit->alb.rt=rt;
+  implicit->col.R=r;
+  implicit->col.G=g;
+  implicit->col.B=b;
+  implicit->alpha=alpha;
+  implicit->r_index=R_index;
+  implicit->shinyness=shiny;
+  implicit->intersect=&implicitIntersect;
+  implicit->surfaceCoords=&implicitCoordinates;
+  implicit->implicit=distance;
+  implicit->implicitNormal=normal;
+  implicit->randomPoint=&implicitSample;
+  implicit->texImg=NULL;
+  implicit->photonMap=NULL;
+  implicit->normalMap=NULL;
+  memcpy(&implicit->T[0][0],&eye4x4[0][0],16*sizeof(double));
+  memcpy(&implicit->Tinv[0][0],&eye4x4[0][0],16*sizeof(double));
+  implicit->textureMap=&texMap;
+  implicit->frontAndBack=0;
+  implicit->photonMapped=0;
+  implicit->normalMapped=0;
+  implicit->isCSG=0;
+  implicit->isLightSource=0;
+  implicit->next=NULL; }
+ return(implicit);
+}
 
+//Shape describes what shape it uses. 0 for plane, 1 for sphere, 2 for cylinder
+struct object3D *newCSG(int shape, int operation, double ra, double rd, double rs, double rg, double rt, double r, double g, double b, double alpha, double r_index, double shiny)
+{
+	struct object3D *newObj;
+	if(shape == 0){
+		newObj = newPlane(ra, rd, rs, rg, rt, r, g, b, alpha, r_index, shiny);
+	}else if(shape == 1){
+		newObj = newPlane(ra, rd, rs, rg, rt, r, g, b, alpha, r_index, shiny);
+	}else if(shape == 2){
+		newObj = newPlane(ra, rd, rs, rg, rt, r, g, b, alpha, r_index, shiny);
+	}else{
+		printf("Invalid shape type. 0 = plane, 1 = sphere, 2 = cylinder");
+		return NULL;
+	}
+	newObj->isCSG=1;
+	newObj->CSGOperation=operation;
+	return(newObj);
+	
+}
 ///////////////////////////////////////////////////////////////////////////////////////
 // TO DO:
 //	Complete the functions that compute intersections for the canonical plane
@@ -346,10 +422,17 @@ void planeIntersect(struct object3D *plane, struct ray3D *ray, double *lambda, s
  //POI.x = 2(\beta) - 1 => (\beta) = (POI.x + 1)/2
  double beta = (normPOI.px + 1)/2;
  double alpha = (normPOI.py + 1)/2;
+ *a = 0;
+ *b = 0;
  
  //Only assign lambda if value is within planar patch
  if(beta <= 1 && beta >= 0 && alpha <= 1 && alpha >= 0){
-	 //printf("Plane Lambda: %f\n", lambdaValue);
+	 if(plane->normalMap != NULL){
+		normalMap(plane->normalMap, alpha, beta, &planeNormal.px, &planeNormal.py, &planeNormal.pz);
+		normalize(&planeNormal);
+		//printf("(%f,%f,%f)\n", planeNormal.px, planeNormal.py, planeNormal.pz);
+		
+	 }
 	 normalTransform(&planeNormal, &planeNormal, plane);
 	 //Make sure the normal is greater or equals to 90 degrees to the incident ray.
 	 if(dot(&ray->d, &planeNormal) > 0){
@@ -365,12 +448,17 @@ void planeIntersect(struct object3D *plane, struct ray3D *ray, double *lambda, s
  } else {
 	*lambda = -1;
  }
- 
+ if(*a < -1 || *a > 1 || *b < -1 || *b > 1){
+	printf("Plane: %f,%f\n", *a, *b);
+ }
 }
 
 void sphereIntersect(struct object3D *sphere, struct ray3D *ray, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b)
 {
-
+	if(ray->p0.px + 0.193628 <PRECISION && ray->p0.py + 0.005090 < PRECISION && ray->p0.pz < PRECISION && 
+	ray->d.px + 0.190095 < PRECISION && ray->d.py + 0.004997 < PRECISION && ray->d.pz - 0.981753 < PRECISION){
+		//printf("Good\n");
+	}
 	//printf("Object color sphere: (%f, %f, %f)\n", sphere->col.R, sphere->col.G, sphere->col.B);
  // Computes and returns the value of 'lambda' at the intersection
  // between the specified ray and the specified canonical sphere.
@@ -415,6 +503,7 @@ void sphereIntersect(struct object3D *sphere, struct ray3D *ray, double *lambda,
 	//printf("lambdavalues: %f, %f\n", lambdaValue1, lambdaValue2);
 	 double lambdaValue1 = (-B + sqrt(B*B - 4*A*C))/(2*A);
 	 double lambdaValue2 = (-B - sqrt(B*B - 4*A*C))/(2*A);
+	 //printf("%f, %f\n", lambdaValue1, lambdaValue2);
 	//Take the closest positive intersection
 	if(lambdaValue1 <= PRECISION && lambdaValue2 <= PRECISION){
 		//Take no lambda if they are negative
@@ -446,7 +535,7 @@ void sphereIntersect(struct object3D *sphere, struct ray3D *ray, double *lambda,
 	struct point3D mPOI = unitPOI;
 	matVecMult(sphere->T, &mPOI);
 	*p=mPOI;
-	
+
 	//printf("UnitPOI:(%f, %f, %f), POI: (%f, %f, %f), matPOI:(%f, %f, %f)\n", unitPOI.px, unitPOI.py, unitPOI.pz, p->px, p->py, p->pz, mPOI.px, mPOI.py, mPOI.pz);
 	
 	//Implicit form for unit sphere is x^2 + y^2 + z^2 - 1 = 0
@@ -456,22 +545,44 @@ void sphereIntersect(struct object3D *sphere, struct ray3D *ray, double *lambda,
 	struct point3D unitNormal = {.px = 2*unitPOI.px, 
 								 .py = 2*unitPOI.py, 
 								 .pz = 2*unitPOI.pz, 
-								 .pw = 1};	
+								 .pw = 1};
+	//beta = arccos(z)
+	//alpha = arcsin(y/sin(beta)) or arccos(x/sin(beta))
+	double beta = acos(unitPOI.pz);
+	double alpha = 0;
+	if(sin(beta) > PRECISION && unitPOI.py/sin(beta) <= 1 && unitPOI.py/sin(beta) >= -1){
+		alpha = asin(unitPOI.py/sin(beta));	
+	}
+	if(isunordered(alpha, beta)){
+		printf("For some unknown reason, alpha is not a number!\n");
+		printf("Beta0: %f, %f\n", unitPOI.py, beta);
+		alpha = 0;
+	}
+	//Normalize a and b
+	//b = [0, pi]
+	//b/pi = [0, 1]
+	//a = [-pi, pi]
+	//(a + pi)/2pi = [0,1]
+	*b = beta/M_PI;
+	*a = (alpha + M_PI)/(2*M_PI);
+	if(sphere->normalMap != NULL){
+		normalMap(sphere->normalMap, *a, *b, &unitNormal.px, &unitNormal.py, &unitNormal.pz);
+		//Uses spherical coordinates originating at theta = phi = 0, which corresponds to the (0,0,1) vector
+		struct object3D *o = newSphere(.2,.95,.75,.75,1,.75,.95,.55,0,1,6);
+		RotateZ(o, -beta);
+		RotateY(o, -alpha);
+		matVecMult(o->T, &unitNormal);
+		free(o);
+	}
 	normalize(&unitNormal);
 	//printf("UnitNormal: (%f, %f, %f)\n", unitNormal.px, unitNormal.py, unitNormal.pz);
 	normalTransform(&unitNormal, &unitNormal, sphere);
 	//printf("UnitNormalFormula: (%f, %f, %f)\n", unitNormal.px, unitNormal.py, unitNormal.pz);
 	*n = unitNormal;
-	//b = arccos(z)
-	*b = acos(unitPOI.pz);
-	//a = arcsin(y/sin(b))
-	//a = arccos(x/sin(b))
-	*a = asin(unitPOI.py/sin(*b));
-	//sphereNormalV2(sphere, *a, *b, n);
-	//printf("(a,b):(%f,%f)\n", *a, *b);
-	//printf("ax, ay: (%f, %f)\n", acos(unitPOI.px/sin(*b)), asin(unitPOI.py/sin(*b)));
  }
-
+	if(*a <  -1 || *a > 1 || *b < -1 || *b > 1){
+		printf("Sphere: %f,%f\n", *a, *b);
+	}
 }
 
 void cylIntersect(struct object3D *cylinder, struct ray3D *ray, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b)
@@ -623,17 +734,237 @@ void cylIntersect(struct object3D *cylinder, struct ray3D *ray, double *lambda, 
 	if(unitPOI.pz < 1 + PRECISION && unitPOI.pz > 1-PRECISION){
 		//Top face
 		norm = normalz1;
+		if(cylinder->normalMap != NULL){
+			normalMap(cylinder->normalMap, (asin(unitPOI.py) + M_PI/2)/M_PI, unitPOI.pz, &norm.px, &norm.py, &norm.pz);
+		}
 	} else if(unitPOI.pz < PRECISION && unitPOI.pz > -PRECISION){
 		//Bottom face
 	    norm = normalz0;
+		if(cylinder->normalMap != NULL){
+			normalMap(cylinder->normalMap, (asin(unitPOI.py) + M_PI/2)/M_PI, unitPOI.pz, &norm.px, &norm.py, &norm.pz);
+			norm.pz = -norm.pz;
+		}
 	} else {
 		//Side face
 		norm = {.px = unitPOI.px, .py = unitPOI.py, .pz = unitPOI.pz, .pw = 0};
+		if(cylinder->normalMap != NULL){
+			normalMap(cylinder->normalMap, (asin(unitPOI.py) + M_PI/2)/M_PI, unitPOI.pz, &norm.px, &norm.py, &norm.pz);
+			//Uses spherical coordinates originating at theta = phi = 0, which corresponds to the (0,0,1) vector
+			struct object3D *o = newSphere(.2,.95,.75,.75,1,.75,.95,.55,0,1,6);
+			RotateZ(o, -M_PI/2);
+			RotateY(o, -asin(-norm.py*2/M_PI));
+			matVecMult(o->T, &norm);
+			free(o);
+		}
 	}
 	normalTransform(&norm, n, cylinder);
 	*b = unitPOI.pz;
 	*a = asin(unitPOI.py);
+	//Normalize a and b
+	//b = [0, 1], so it is fine
+	//a = [-pi/2, pi/2], so add pi/2 and divide by pi
+	*a = ((*a) + M_PI/2)/M_PI;
  }
+	if(*a+1 < PRECISION || *a -1 > PRECISION || *b+1 < PRECISION || *b-1 > PRECISION){
+		printf("Cylinder: %f,%f\n", *a, *b);
+	}
+}
+
+void implicitIntersect(struct object3D *implicit, struct ray3D *ray, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b)
+{
+	struct point3D point;
+	int binarySearchSteps = 1;
+	double value0;
+	double value1;
+	double valuemid;
+	
+	//Transform the ray first
+	struct ray3D transformedRay;
+	rayTransform(ray, &transformedRay, implicit);
+	normalize(&transformedRay.d);
+	
+	//printf("Ray:(%f,%f,%f) +(%f,%f,%f)\n", ray->p0.px, ray->p0.py, ray->p0.pz, ray->d.px, ray->d.py, ray->d.pz);
+	//printf("TRay:(%f,%f,%f) +(%f,%f,%f)\n", transformedRay.p0.px, transformedRay.p0.py, transformedRay.p0.pz, transformedRay.d.px, transformedRay.d.py, transformedRay.d.pz);
+	*lambda = 0;
+	computePoint(&transformedRay, *lambda, &point);
+	implicit->implicit(&point, &value0);
+	int done = 0;
+	while(!done){
+		//printf("Value: %f\n", value0);
+		if(value0 < PRECISION && value0 > -PRECISION){ // If the original guess is on the wall
+			done = 1;
+		} else{
+			*lambda = *lambda + LAMBDAINCREMENT;
+			computePoint(&transformedRay, *lambda, &point);
+			implicit->implicit(&point, &value1);
+			if(value1 < PRECISION && value1 > -PRECISION){ //If it is exactly on the wall
+				done = 1;
+			}else if(value0*value1 < 0){//If the signs are different, then the wall is somewhere in between
+				*lambda = *lambda - LAMBDAINCREMENT/pow(2, binarySearchSteps);
+				computePoint(&transformedRay, *lambda, &point);
+				implicit->implicit(&point, &valuemid);
+				while(binarySearchSteps < 5){//Only want to run binary search a maximum of 5 times to save computation
+					binarySearchSteps++;
+					if(valuemid == 0){
+						binarySearchSteps = 5;
+					}
+					else{ 
+						if(valuemid*value0 < 0){
+							*lambda = *lambda - LAMBDAINCREMENT/pow(2, binarySearchSteps);
+						}else{
+							*lambda = *lambda + LAMBDAINCREMENT/pow(2, binarySearchSteps);
+						}
+						computePoint(&transformedRay, *lambda, &point);
+						implicit->implicit(&point, &valuemid);
+					}
+					
+				}
+				done = 1;
+			}
+			value0 = value1;
+		}
+		
+		if(*lambda > RAYMARCHMAX){
+			done = 1;
+			*lambda = -1;
+		}
+	}
+	if(*lambda >= 0){
+		computePoint(&transformedRay, *lambda, &point);
+		//POI has been calculated
+		*p = point;
+		//Calculates the normal at the unit POI
+		implicit->implicitNormal(p, n);
+		//Transforms the unit POI to the actual POI
+		matVecMult(implicit->T, p);
+		normalize(n);
+		normalTransform(n, n, implicit);
+		*a = -1;
+		*b = -1;
+		//printf("%f\n", *lambda);
+	}
+}
+
+
+//Takes the start of a CSGObject. Only the starts of CSG Objects are added to the object list
+void CSGIntersect(struct object3D *node, struct ray3D *ray, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b){
+	*lambda = -1;
+	int length = 1;
+	int arrLength = 0;
+	struct object3D *tempNode = node;
+	while(tempNode != NULL){
+		length++;
+		tempNode = tempNode->CSGNext;
+	}
+	double arr[3*length];//First value in array is where the first lambda, each value after that is how far away from the first lambda it is
+						 //Postive means that it travels within an object, and negative means it travels in air
+	while(tempNode != NULL){
+		struct ray3D *tempRay = ray;
+		double tempLambda1 = -1, tempLambda2 = -1, a, b;
+		struct point3D p, n;
+		tempNode->intersect(tempNode, tempRay, &tempLambda1, &p, &n, &a, &b);
+		if(tempLambda1 > 0){
+			tempRay->p0 = p;
+			tempNode->intersect(tempNode, tempRay, &tempLambda2, &p, &n, &a, &b);
+		}
+		
+		if(tempNode->CSGOperation == -2){//First element
+			if(tempLambda1 > 0){
+				arr[0] = tempLambda1;
+				arrLength++;
+				if(tempLambda2 > 0){
+					arr[1] = tempLambda2;
+					arrLength++;
+				}
+			}
+		}else if(tempNode->CSGOperation == -1 && tempLambda1 > 0 && tempLambda2 > 0){//Minus
+			double acc = 0;
+			double temparr[length*3];
+			int j = 0;
+			for(int i = 0; i < arrLength; i++){
+				acc += abs(arr[i]);
+				if(tempLambda1 > acc || tempLambda1 + tempLambda2 < acc){
+					temparr[j] = arr[i];
+					j++;
+				}else if(tempLambda1 < acc && tempLambda1 > acc - arr[i]){
+					temparr[j] = tempLambda1;
+					if(arr[i] < 0){
+						temparr[j] = -temparr[j];
+					}
+					j++;
+				}else if(tempLambda2+tempLambda1 < acc && tempLambda2+tempLambda1 > acc - arr[i]){
+					temparr[j] = tempLambda2;
+					j++;
+					temparr[j] = acc - tempLambda1 - tempLambda2;
+					if(arr[i] < 0){
+						temparr[j] = -temparr[j];
+					}
+					j++;
+				}
+			}
+			memcpy(arr, temparr, sizeof(int)*length*3);
+		}else if(tempNode->CSGOperation == 0){//Intersect
+			double acc = 0;
+			double temparr[length*3];
+			int j = 0;
+			for(int i = 0; i < arrLength; i++){
+				acc += abs(arr[i]);
+				if(tempLambda1 < acc && tempLambda1 > acc - arr[i]){
+					if(arr[i] < 0){
+						temparr[j] = acc;
+					}else{
+						temparr[j] = tempLambda1;
+					}
+					j++;
+				}else if(tempLambda2+tempLambda1 < acc && tempLambda2+tempLambda1 > acc - arr[i]){
+					if(arr[i] < 0){
+						temparr[j] = acc - arr[i];
+					}else{
+						temparr[j] = tempLambda2;
+					}
+					j++;
+				}else if(tempLambda1 < acc && tempLambda1 + tempLambda2 > acc){
+					temparr[j] = arr[i];
+					j++;
+				}
+			}
+			memcpy(arr, temparr, sizeof(int)*length*3);
+		}else if(tempNode->CSGOperation == 1){//Union
+			double acc = 0;
+			double temparr[length*3];
+			int j = 0;
+			for(int i = 0; i < arrLength; i++){
+				acc += abs(arr[i]);
+				if(tempLambda1 > acc || tempLambda1 + tempLambda2 < acc){
+					temparr[j] = arr[i];
+					j++;
+				}else if(tempLambda1 < acc && tempLambda1 > acc - arr[i]){
+					temparr[j] = tempLambda1;
+					if(arr[i] > 0){
+						temparr[j] = -temparr[j];
+					}
+					j++;
+				}else if(tempLambda2+tempLambda1 < acc && tempLambda2+tempLambda1 > acc - arr[i]){
+					temparr[j] = tempLambda2;
+					j++;
+					temparr[j] = acc - tempLambda1 - tempLambda2;
+					if(arr[i] > 0){
+						temparr[j] = -temparr[j];
+					}
+					j++;
+				}
+			}
+			memcpy(arr, temparr, sizeof(int)*length*3);
+		}
+		tempNode = tempNode->CSGNext;
+	}
+	
+	//Takes the first non minus lambda point of intersection
+	int i = 0;
+	while(arr[i] < 0){
+		i++;
+	}
+	*lambda = arr[i];
 }
 
 /////////////////////////////////////////////////////////////////
@@ -652,14 +983,14 @@ void planeCoordinates(struct object3D *plane, double a, double b, double *x, dou
  //Takes the bottom left (-1, -1, 0) as starting point
  //Change in vertial position is decided by vector (0, 2, 0)
  //Change in horizontal position is decided by vector (2, 0, 0) 
-struct point3D planePoint = {.px = 2*a - 1, .py = 2*b - 1, .pz = 0,	.pw = 1};
+ struct point3D planePoint = {.px = 2*a - 1, .py = 2*b - 1, .pz = 0,	.pw = 1};
  
  //Transforms the point by the transformation matrix of the plane to get the actual point
  matVecMult(plane->T, &planePoint);
  
- x=&planePoint.px;
- y=&planePoint.py;
- z=&planePoint.pz;
+ *x=planePoint.px;
+ *y=planePoint.py;
+ *z=planePoint.pz;
  
 }
 
@@ -679,9 +1010,9 @@ void sphereCoordinates(struct object3D *sphere, double a, double b, double *x, d
  //Transform the point based on the transformation matrix
  matVecMult(sphere->T, &spherePoint);
  
- x=&spherePoint.px;
- y=&spherePoint.py;
- z=&spherePoint.pz;
+ *x=spherePoint.px;
+ *y=spherePoint.py;
+ *z=spherePoint.pz;
 }
 
 void cylCoordinates(struct object3D *cyl, double a, double b, double *x, double *y, double *z)
@@ -700,9 +1031,15 @@ void cylCoordinates(struct object3D *cyl, double a, double b, double *x, double 
  //Transform the point based on the transformation matrix
  matVecMult(cyl->T, &cylinderPoint);
  
- x=&cylinderPoint.px;
- y=&cylinderPoint.py;
- z=&cylinderPoint.pz;
+ *x=cylinderPoint.px;
+ *y=cylinderPoint.py;
+ *z=cylinderPoint.pz;
+}
+
+void implicitCoordinates(struct object3D *implicit, double a, double b, double *x, double *y, double *z)
+{
+	//Never used
+	*x = 0; *y = 0; *z = 0;
 }
 
 void planeSample(struct object3D *plane, double *x, double *y, double *z)
@@ -732,16 +1069,17 @@ void sphereSample(struct object3D *sphere, double *x, double *y, double *z)
  /////////////////////////////////
  // TO DO: Complete this function.
  /////////////////////////////////
- 
  //Generate 2 decimal numbers between 0 and 1
  double a = (double)rand()/(double)RAND_MAX; 
  double b = (double)rand()/(double)RAND_MAX;
- //Multiply a by 2PI, so the actual range is [0, 2PI]
- a = a*M_PI*2;
- //Multiply b by PI, then subtract by PI/2, so the range is [-PI/2, PI/2]
- b = (b*M_PI)/2;
+ //Multiply b by PI, so the actual range is [0, PI]
+ b = b*M_PI;
+ //Multiply a by PI, then subtract by PI/2, so the range is [-PI/2, PI/2]
+ a = (a*M_PI) - M_PI/2;
  //Gets the coordinates of those two numbers on the sphere
- sphereCoordinates(sphere, a, b, x, y, z); 
+ //printf("Before:(%f,%f,%f) ", *x, *y, *z);
+ sphereCoordinates(sphere, b, a, x, y, z); 
+ //printf("After:(%f,%f,%f)\n", *x, *y, *z);
 }
 
 void cylSample(struct object3D *cyl, double *x, double *y, double *z)
@@ -761,6 +1099,55 @@ void cylSample(struct object3D *cyl, double *x, double *y, double *z)
  cylCoordinates(cyl, a, b, x, y, z); 
 }
 
+void implicitSample(struct object3D *implicit, double *x, double *y, double *z)
+{
+	//Not Used
+	*x = 0; *y = 0; *z = 0;
+}
+
+/////////////////////////////////
+// Implicit shape definitions
+/////////////////////////////////
+
+//Implicit function for unit sphere
+ void implicitSphere(struct point3D *point, double *value){
+	*value = pow(point->px, 2)+pow(point->py, 2)+pow(point->pz, 2) - 1;
+	//printf("(%f,%f,%f):%f\n", point->px, point->py, point->pz, *value);
+ }
+
+ //Normal function for implicit unit sphere
+ void implicitSphereNormal(struct point3D *point, struct point3D *normal){
+	struct point3D n = { .px = 2*point->px, .py = 2*point->py, .pz = 2*point->pz, .pw = 1};
+	normalize(&n);
+	*normal = n;
+ }
+ 
+ //Implicit function for chubbs shape
+ void implicitChubbs(struct point3D *point, double *value){
+	*value = pow(point->px, 4) + pow(point->py, 4) + pow(point->pz, 4) - pow(point->px, 2) - pow(point->py, 2) - pow(point->pz, 2);
+	//printf("(%f,%f,%f):%f\n", point->px, point->py, point->pz, *value);
+ }
+
+ //Normal function for chubbs shape
+ void implicitChubbsNormal(struct point3D *point, struct point3D *normal){
+	struct point3D n = {.px = 4*pow(point->px, 3) - 2*point->px, .py = 4*pow(point->py, 3) - 2*point->py, .pz = 4*pow(point->pz, 3) - 2*point->pz, .pw = 1};
+	normalize(&n);
+	*normal = n;
+ }
+
+ //Implicit function for tangle cube shape
+ void implicitTangleCube(struct point3D *point, double *value){
+	*value = pow(point->px, 4) - 5*pow(point->px, 2) + pow(point->py, 4) - 5*pow(point->py, 2) + pow(point->pz, 4) - 5*pow(point->pz, 2)+11.8;
+ }
+
+ //Normal function for tangle cube shape
+ void implicitTangleCubeNormal(struct point3D *point, struct point3D *normal){
+	struct point3D n = {.px = 4*pow(point->px, 3) - 10*point->px, .py = 4*pow(point->py, 3) - 10*point->py, .pz = 4*pow(point->pz, 3) - 10*point->pz, .pw = 1};
+	normalize(&n);
+	*normal = n;
+ }
+
+ //Add more definitions however you want	
 
 /////////////////////////////////
 // Texture mapping functions
@@ -785,6 +1172,7 @@ void loadTexture(struct object3D *o, const char *filename, int type, struct text
    if (strcmp(&p->name[0],filename)==0)
    {
     // Found image already on the list
+	printf("%d\n", type);
     if (type==1) o->texImg=p->im;
     else if (type==2) o->normalMap=p->im;
     else o->alphaMap=p->im;
@@ -847,12 +1235,61 @@ void texMap(struct image *img, double a, double b, double *R, double *G, double 
  // coordinates. Your code should use bi-linear
  // interpolation to obtain the texture colour.
  //////////////////////////////////////////////////
-
- *(R)=0;	// Returns black - delete this and
- *(G)=0;	// replace with your code to compute
- *(B)=0;	// texture colour at (a,b)
+ int x = a*(img->sx - 1);
+ int y = b*(img->sy - 1);
+ if(a < -1 || a > 1 || b < -1 || b > 1){
+	//printf("%f, %f\n", a, b);
+ }
+ //printf("(%f,%f),(%d,%d)\n", a, b, img->sx-1, img->sy-1);
+ //printf("(%d,%d,%f,%f)\n", x, y, a*(img->sx - 1), b*(img->sy - 1));
+ double *rgbIm = (double *)img->rgbdata;
+ *(R)=(*(rgbIm+((x+(y*img->sx))*3)+0));	// Returns black - delete this and
+ *(G)=(*(rgbIm+((x+(y*img->sx))*3)+1));	// replace with your code to compute
+ *(B)=(*(rgbIm+((x+(y*img->sx))*3)+2));	// texture colour at (a,b)
+ //if(a < 0.5 && b < 0.5){
+//	printf("(%f,%f,%f)\n", *R,*G,*B);
+ //}
  return;
 }
+
+void normalMap(struct image *img, double a, double b, double *x, double *y, double *z)
+{
+ /*
+  Function to determine the colour of a textured object at
+  the normalized texture coordinates (a,b).
+
+  a and b are texture coordinates in [0 1].
+  img is a pointer to the image structure holding the texture for
+   a given object.
+
+  The colour is returned in R, G, B. Uses bi-linear interpolation
+  to determine texture colour.
+ */
+
+ //////////////////////////////////////////////////
+ // TO DO (Assignment 4 only):
+ //
+ //  Complete this function to return the colour
+ // of the texture image at the specified texture
+ // coordinates. Your code should use bi-linear
+ // interpolation to obtain the texture colour.
+ //////////////////////////////////////////////////
+ int i = a*(img->sx - 1);
+ int j = b*(img->sy - 1);
+ //printf("%f->%d, %f->%d\n", a, i, b, j);
+ //printf("%f->%d, %f->%d\n", a, i, b, j);
+ if((i+j*img->sx)*3 < 0){
+	printf("Less:%d, %d, %f, %f\n", img->sx, img->sy, a, b);
+ }else if((i+j*img->sx)*3 > img->sx*img->sy*3 - 6){
+	printf("More?:%d, %d, %f, %f\n", img->sx, img->sy, a, b);
+ }
+ double *rgbIm = (double *)img->rgbdata;
+ *(x)=(*(rgbIm+((i+(j*img->sx))*3)+0))*2 - 1;
+ *(y)=(*(rgbIm+((i+(j*img->sx))*3)+1))*2 - 1;
+ *(z)=(*(rgbIm+((i+(j*img->sx))*3)+2))*2 - 1;
+ return;
+}
+
 
 void alphaMap(struct image *img, double a, double b, double *alpha)
 {
@@ -875,6 +1312,37 @@ void alphaMap(struct image *img, double a, double b, double *alpha)
 
 
 /////////////////////////////
+// Refractive index stack functions
+/////////////////////////////
+
+void push(struct objStack *objstack, double index){
+	struct objStack *stack=(struct objStack *)calloc(1, sizeof(struct objStack));
+	stack->index = index;
+	if(objstack != NULL){
+		stack->next = objstack;
+	}
+	objstack = stack;
+};
+
+double pop(struct objStack *objstack){
+	if(objstack==NULL){
+		return -1;
+	}
+	double index = objstack->index;
+	struct objStack *temp = objstack;
+	objstack = objstack->next;
+	free(temp);
+	return index;
+};
+
+double peek(struct objStack *objstack){
+	if(objstack==NULL){ //Object is in air
+		return 1;
+	}
+	return objstack->index;
+}
+
+/////////////////////////////
 // Light sources
 /////////////////////////////
 void insertPLS(struct pointLS *l, struct pointLS **list)
@@ -892,6 +1360,19 @@ void insertPLS(struct pointLS *l, struct pointLS **list)
   (*(list))->next=l;
  }
 
+}
+
+void insertALS(struct areaLS *a, struct areaLS **list){
+	
+	if(a==NULL) return;
+	
+	if(*(list)==NULL){
+		*(list)=a;
+		(*(list))->next=NULL;
+	} else{
+		a->next=(*(list))->next;
+		(*(list))->next=a;
+	}
 }
 
 void addAreaLight(double sx, double sy, double nx, double ny, double nz,\
@@ -1361,7 +1842,6 @@ struct image *readPPMimage(const char *filename)
 
   tmpi=fread(tmp,sizx*sizy*3*sizeof(unsigned char),1,f);
   fclose(f);
-
   // Conversion to floating point
   for (i=0; i<sizx*sizy*3; i++) *(fRGB+i)=((double)*(tmp+i))/255.0;
   free(tmp);

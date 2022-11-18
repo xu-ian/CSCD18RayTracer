@@ -17,6 +17,7 @@
 #include<math.h>
 #include<string.h>
 #include<pthread.h>
+#include<time.h> //Debugging time spent on computation
 
 #ifndef __RayTracer_header
 #define __RayTracer_header
@@ -84,6 +85,7 @@ struct albedosPhong{
 	double rd;	// Diffuse component albedo
 	double rs;	// Specular component albedo
 	double rg;	// Global component albedo
+	double rt;	// Global Refractive albedo
 };
 
 /*
@@ -117,18 +119,26 @@ struct object3D{
 	struct colourRGB col;		// Object's colour in RGB
 	double  T[4][4]; 		// T holds the transformation applied to this object.
 	double  Tinv[4][4];      	// Tinv holds the inverse transformation
+	
+	//Below holds the abstract function that takes a point and calculates the value of the 
+	//point after running it through the implicit function.
+	//This has to be defined manually
+	void (*implicit)(struct point3D *p, double *value);
 
+	//Below holds the abstract function that takes a point on the implicit shape and calculates it's normal
+	//This has to be defined manually as a gradient of the implicit function
+	void (*implicitNormal)(struct point3D *p, struct point3D *n);
+	
         // Below we set up space for a pointer to the intersection function for this object.
         // Note that the intersection function must compute the lambda at the intersection, the
         // intersection point p, the normal at that point n, and the texture coordinates (a,b).
         // The texture coordinates are not used unless texImg!=NULL and a textureMap function
         // has been provided
-	void (*intersect)(struct object3D *obj, struct ray3D *ray, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b);		
-
+	void (*intersect)(struct object3D *obj, struct ray3D *ray, double *lambda, struct point3D *p, struct point3D *n, double *a, double *b);
 	// Texture mapping function. Takes normalized texture coordinates (a,b) and returns the
   	// texture colour at that point using bi-linear interpolation 
 	void (*textureMap)(struct image *img, double a, double b, double *R, double *G, double *B);
-
+	
 	// Functions to return coordinates on the surface of the object. One takes as input the a and b
         // parameters for the parametric function of the object and returns the (x,y,z) coordinates
         // on the object surface. The second returns a uniformly random-sampled point on the surface.
@@ -136,7 +146,10 @@ struct object3D{
         void (*surfaceCoords)(struct object3D *obj, double a, double b, double *x, double *y, double *z);
         void (*randomPoint)(struct object3D *obj, double *x, double *y, double *z);
 		
-        struct image *texImg;				// Pointer to structure holding the texture for this object
+		//Function for CSG Binary trees intersects to operate on
+		void (*lambdas)(struct object3D *obj, double *lambda1, double *lambda2);
+		
+		struct image *texImg;				// Pointer to structure holding the texture for this object
         struct image *photonMap;			// Photon map for this object
 	struct image *normalMap;			// Normal map for this object
 	struct image *alphaMap;				// Alpha map for the object
@@ -151,13 +164,13 @@ struct object3D{
 					// should be lit.
 	int	isLightSource;		// Flag to indicate if this is an area light source
 	int isCSG;			// Object is part of a CSG composite object. Links to components via CSGnext
+	int CSGOperation;		//What operation the object performs with the previous one in the list
+							//-2 = first item in list, -1 = minus, 0 = intersect, 1 = union
 	int photonMapped;		// This object accumulates photons under photon mapping
 	int normalMapped;		// This object has an associated normal map
 	int alphaMapped;		// This object has an associated alpha map
-
-	struct object3D *CSGnext;	// For CSG objects, points to next component
+	struct object3D *CSGNext;	// Pointer to next CSGObject
 	struct object3D *next;		// Pointer to next entry in object linked list
-	
 	// If needed for the advanced raytracer, you can modify this data structure to add any data/methods you
 	// require.
 };
@@ -165,8 +178,22 @@ struct object3D{
 /* The structure below defines a point light source */
 struct pointLS{
 	struct colourRGB col;		// Light source colour
-	struct point3D p0;		// Light source location
+	struct point3D p0;			// Light source location
+	int isObj;					// Switch to check whether light source is point or shape
+	struct object3D obj;		// Storage for 3d object for object3D
 	struct pointLS *next;		// Pointer to next light in the scene
+};
+
+/* The structure below defines an area light source */
+struct areaLS{
+	struct object3D obj;		// Definition of light source
+	struct areaLS *next;		// Pointer to next area light source
+};
+
+/* The below object is a stack that keeps track of which object you are in */
+struct objStack{
+	double index;
+	struct objStack *next;
 };
 
 /*
@@ -191,8 +218,8 @@ int main(int argc, char *argv[]);									// Main raytracing function.
 
 // Raytracing
 void buildScene(void);											// Scene set up. Defines objects and object transformations
-void rayTrace(struct ray3D *ray, int depth, struct colourRGB *col, struct object3D *Os);		// RayTracing routine
-void findFirstHit(struct ray3D *ray, double *lambda, struct object3D *Os, struct object3D **obj, struct point3D *p, struct point3D *n, double *a, double *b);
-void rtShade(struct object3D *obj, struct point3D *p, struct point3D *n,struct ray3D *ray, int depth, double a, double b, struct colourRGB *col);
+void rayTrace(struct ray3D *ray, int depth, struct colourRGB *col, struct object3D *Os, struct objStack *position);		// RayTracing routine
+void findFirstHit(struct ray3D *ray, double *lambda, struct object3D *Os, struct object3D **obj, struct point3D *p, struct point3D *n, double *a, double *b, int ignoreLightSource);
+void rtShade(struct object3D *obj, struct point3D *p, struct point3D *n,struct ray3D *ray, int depth, double a, double b, struct colourRGB *col, struct objStack *position);
 
 #endif

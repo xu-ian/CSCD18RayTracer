@@ -42,20 +42,29 @@
 
 #include "utils.h"	// <-- This includes RayTracer.h
 
+#define AANumber 5
+#define AREALIGHTSAMPLES 10
+#define NUM_THREADS 4
+
 // A couple of global structures and data: An object list, a light list, and the
 // maximum recursion depth
 struct object3D *object_list;
 struct pointLS *light_list;
 struct textureNode *texture_list;
 int MAX_DEPTH;
+struct timespec start, end;
+double elapsed;
 
 void buildScene(void)
-{
-#include "buildscene.c"		// <-- Import the scene definition! 
+{//Comment and uncomment lines to render different scenes
+#include "buildscene.c"			// Scene definition for MyRender.ppm(Test Scene) 
+//#include "buildsceneImplicit.c"	// Scene definition for implicit.ppm
+//#include "buildsceneNormal.c"		// Scene definition for NormalMap.ppm
 }
 
+
 //Recursive helper function to determine whether there are shadows on that point by iterating through the light list
-//Returns 0 if shadows exist, 1 if they don't.
+//Returns 0 or 1 if it is a point and a value from 0 to 1 if it is an area light source
 //Numbers are used to multiply the final col value.
 double shadowChecker(struct object3D * colObj, struct point3D *POI, struct point3D *normal, struct pointLS *lightSource){
 
@@ -67,29 +76,56 @@ double shadowChecker(struct object3D * colObj, struct point3D *POI, struct point
 	//Initializes all the other variables required to use findFirstHit, all except lambda are never used
 	double a, b, lambda = -1;
 	struct point3D p, p2, n;
-	struct point3D d = lightSource->p0;
-	subVectors(POI, &d);
-	//Initializes the ray from the object to the lightsource starting at the POI
-	struct ray3D ray;
-	initRay(&ray, POI, &d);
+	//Point Light Source Calculations
+	if(!lightSource->isObj){
+		//printf("Point Light Source\n");
+		struct point3D d = lightSource->p0;
+		subVectors(POI, &d);
+		//Initializes the ray from the object to the lightsource starting at the POI
+		struct ray3D ray;
+		initRay(&ray, POI, &d);
 
-	//Initializes the ray from the lightsource to the POI
-	struct object3D *obj = object_list;
-	findFirstHit(&ray, &lambda, colObj, &obj, &p, &n, &a, &b);
-	//If it hits another object, then a shadow can exist
-	if(lambda > 0){
+		//Initializes the ray from the lightsource to the POI
+		struct object3D *obj = object_list;
+		findFirstHit(&ray, &lambda, colObj, &obj, &p, &n, &a, &b, 1);
+		//If it hits another object, then a shadow can exist
+		if(lambda > 0){
+			return shadowChecker(colObj, POI, normal, lightSource->next);
+		}
+		if(dot(normal, &d) < 0){
+			return shadowChecker(colObj, POI, normal, lightSource->next);
+		}
+		//Otherwise a shadow cannot exist
+		return 1;
+	}
+	//Area Light Source Calculations
+	double x, y, z;
+	int acc = 0;
+	for(int i = 0; i < AREALIGHTSAMPLES; i++){
+		//printf("Area light source\n");
+		lightSource->obj.randomPoint(&lightSource->obj, &x, &y, &z);
+		struct point3D d = {.px = x, .py = y, .pz = z, .pw= 1};
+		subVectors(POI, &d);
+		struct ray3D ray;
+		initRay(&ray, POI, &d);
+		struct object3D *obj = object_list;
+		findFirstHit(&ray, &lambda, colObj, &obj, &p, &n, &a, &b, 1);
+		if(!(lambda > 0 || dot(normal, &d) < 0)){
+			acc++;
+		}
+	}
+	if(acc == 0){
 		return shadowChecker(colObj, POI, normal, lightSource->next);
 	}
-	if(dot(normal, &d) < 0){
-		return shadowChecker(colObj, POI, normal, lightSource->next);
+	if(acc < AREALIGHTSAMPLES){
+		//printf("%d\n", acc);
 	}
-	//Otherwise a shadow cannot exist
-	return 1;
+	return max((double)acc/(double)AREALIGHTSAMPLES, shadowChecker(colObj, POI, normal, lightSource->next));
 }
 
 //Calculation for different images given the different components
 //Types: 1 = normals, 2 = ambient, 3 = diffuse + ambient + shadows, 4 = specular + shadows, 5 = ambient + diffuse + specular + shadows, 6 = global reflection only, 7 = full without refraction, 
-//8 = full with refraction(Cannot be implemented yet)
+//8 = full with refraction
 void colorCalc(struct colourRGB *Itotal, struct colourRGB *ambient, struct colourRGB *diffuse, struct colourRGB *specular, 
 			   double shadowConstant, struct colourRGB *Ispec, struct colourRGB *Irefr, struct point3D *n, struct object3D *obj, int type){
 	if(type == 1){
@@ -121,9 +157,10 @@ void colorCalc(struct colourRGB *Itotal, struct colourRGB *ambient, struct colou
 		Itotal->G = ambient->G*obj->alb.ra + (diffuse->G*obj->alb.rd + specular->G*obj->alb.rs)*shadowConstant + Ispec->G*obj->alb.rg;
 		Itotal->B = ambient->B*obj->alb.ra + (diffuse->B*obj->alb.rd + specular->B*obj->alb.rs)*shadowConstant + Ispec->B*obj->alb.rg;
 	}else if(type == 8){
-		//Itotal->R = ambient->R*obj->alb.ra + (diffuse->R*obj->alb.rd + specular->R*obj->alb.rs)*shadowConstant + Ispec->R*obj->alb.rg + Irefr*obj->alb.rt;
-		//Itotal->G = ambient->G*obj->alb.ra + (diffuse->G*obj->alb.rd + specular->G*obj->alb.rs)*shadowConstant + Ispec->G*obj->alb.rg + Irefr*obj->alb.rt;
-		//Itotal->B = ambient->B*obj->alb.ra + (diffuse->B*obj->alb.rd + specular->B*obj->alb.rs)*shadowConstant + Ispec->B*obj->alb.rg + Irefr*obj->alb.rt;
+		//printf("%f, %f, %f\n", Irefr->R, Irefr->G, Irefr->B);
+		Itotal->R = obj->alpha*(ambient->R*obj->alb.ra + (diffuse->R*obj->alb.rd + specular->R*obj->alb.rs)*shadowConstant + Ispec->R*obj->alb.rg) + (1.0 - obj->alpha)*Irefr->R*obj->alb.rt;
+		Itotal->G = obj->alpha*(ambient->G*obj->alb.ra + (diffuse->G*obj->alb.rd + specular->G*obj->alb.rs)*shadowConstant + Ispec->G*obj->alb.rg) + (1.0 - obj->alpha)*Irefr->G*obj->alb.rt;
+		Itotal->B = obj->alpha*(ambient->B*obj->alb.ra + (diffuse->B*obj->alb.rd + specular->B*obj->alb.rs)*shadowConstant + Ispec->B*obj->alb.rg) + (1.0 - obj->alpha)*Irefr->B*obj->alb.rt;
 	}
 }
 
@@ -135,22 +172,39 @@ double lightDots(struct pointLS *lightSource, struct object3D *collisionObject, 
 	if(lightSource == NULL){
 		return 0;
 	}
+	//Assign light source and point to be point light source by default
+	double lightSourceR = lightSource->col.R;
+	double lightSourceG = lightSource->col.G;
+	double lightSourceB = lightSource->col.B;
 	struct point3D lightVector = lightSource->p0;
+	if(lightSource->isObj){
+		//Change the values if it is area light source
+		lightSourceR = lightSource->obj.col.R;
+		lightSourceG = lightSource->obj.col.G;
+		lightSourceB = lightSource->obj.col.B;
+		double x, y, z;
+		double accx, accy, accz = 0;
+		for(int i = 0; i < AREALIGHTSAMPLES; i++){
+			lightSource->obj.randomPoint(&lightSource->obj, &x, &y, &z);
+			accx += x;
+			accy += y;
+			accz += z;
+		}
+		accx = accx/AREALIGHTSAMPLES;
+		accy = accy/AREALIGHTSAMPLES;
+		accz = accz/AREALIGHTSAMPLES;
+		lightVector = {.px = accx, .py = accy, .pz = accz, .pw= 0};
+	}
 	subVectors(POI, &lightVector);
 	normalize(&lightVector);
 	normalize(normal);
 	if(col == 1){
-		value = dot(normal, &lightVector) * lightSource->col.R;
+		value = dot(normal, &lightVector) * lightSourceR;
 	} else if(col == 2){
-		value = dot(normal, &lightVector) * lightSource->col.G;		
+		value = dot(normal, &lightVector) * lightSourceG;		
 	} else {
-		value = dot(normal, &lightVector) * lightSource->col.B;
+		value = dot(normal, &lightVector) * lightSourceB;
 	}
-	
-	//if(value < 0){
-	//	value = 0;
-	//}
-	
 	return value + lightDots(lightSource->next, collisionObject, POI, normal, col);
 }
 
@@ -162,33 +216,59 @@ double specLights(struct pointLS *lightSource, struct object3D *collisionObject,
 	if(lightSource == NULL){
 		return 0;
 	}
-	
-	//If the light does not hit it directly there is no specular
-	struct point3D lightVector = lightSource->p0;
+	//Assign light source and point to be point light source by default
+	double lightSourceR = lightSource->col.R;
+	double lightSourceG = lightSource->col.G;
+	double lightSourceB = lightSource->col.B;
+	struct point3D sourceOfLight = lightSource->p0;
+	//If the light source is an object take an average of multiple possible rays
+	if(lightSource->isObj){
+		//Change the values if it is area light source
+		lightSourceR = lightSource->obj.col.R;
+		lightSourceG = lightSource->obj.col.G;
+		lightSourceB = lightSource->obj.col.B;
+		double x = 0, y = 0, z = 0;
+		double accx = 0, accy = 0, accz = 0;
+		for(int i = 0; i < AREALIGHTSAMPLES; i++){
+			lightSource->obj.randomPoint(&lightSource->obj, &x, &y, &z);
+			accx += x;
+			accy += y;
+			accz += z;
+		}
+		//printf("lightVector:(%f,%f,%f)\n", accx, accy, accz);
+		accx = accx/AREALIGHTSAMPLES;
+		accy = accy/AREALIGHTSAMPLES;
+		accz = accz/AREALIGHTSAMPLES;
+		//lightVector = {.px = accx, .py = accy, .pz = accz, .pw= 0};
+		//printmatrix(lightSource->obj.T);
+		sourceOfLight = {.px = accx, .py = accy, .pz = accz, .pw= 1};
+		//printf("dot:%f\n", dot(&lightVector, &lightVector));
+	}
+	//printf("LightVector:(%f,%f,%f)\n", lightVector.px, lightVector.py, lightVector.pz);
+	struct point3D lightVector = sourceOfLight;
 	subVectors(POI, &lightVector);
 	//normalize(&lightVector);
 	normalize(normal);
 	if(dot(normal, &lightVector) >= 0){
-	
-	//Ray from lightsource to object at POI, this is d vector
-	lightVector = *POI;
-	//Direction is POI - lightSource
-	subVectors(&lightSource->p0, &lightVector);
-	//Reflected ray r is given by d - 2(d*n)n
-	normalize(normal);
-	double d2n = 2 * dot(&lightVector, normal);
-	struct point3D adjNormal = {.px = normal->px*d2n, .py = normal->py*d2n, .pz = normal->pz*d2n};
-	//The reflected vector R for phong is now stored in lightVector
-	subVectors(&adjNormal, &lightVector);
-	normalize(&lightVector);
-	if(col == 1){
-		value = pow(dot(camCoords, &lightVector),collisionObject->shinyness) * lightSource->col.R;
-	} else if(col == 2){
-		value = pow(dot(camCoords, &lightVector),collisionObject->shinyness) * lightSource->col.G;
-	} else {
-		value = pow(dot(camCoords, &lightVector),collisionObject->shinyness) * lightSource->col.B;
-	}
-	
+		//Ray from lightsource to object at POI, this is d vector
+		lightVector = *POI;
+		//Direction is POI - lightSource
+		subVectors(&sourceOfLight, &lightVector);
+		//Reflected ray r is given by d - 2(d*n)n
+		normalize(normal);
+		double d2n = 2 * dot(&lightVector, normal);
+		struct point3D adjNormal = {.px = normal->px*d2n, .py = normal->py*d2n, .pz = normal->pz*d2n};
+		//The reflected vector R for phong is now stored in lightVector
+		subVectors(&adjNormal, &lightVector);
+		normalize(&lightVector);
+		//printf("LightVector:(%f,%f,%f)\n", lightVector.px, lightVector.py, lightVector.pz);
+		if(col == 1){
+			value = pow(dot(camCoords, &lightVector),collisionObject->shinyness) * lightSourceR;
+		} else if(col == 2){
+			value = pow(dot(camCoords, &lightVector),collisionObject->shinyness) * lightSourceG;
+		} else {
+			value = pow(dot(camCoords, &lightVector),collisionObject->shinyness) * lightSourceB;
+		}
 	}
 	
 	//printf("Value: %f", value);
@@ -203,11 +283,12 @@ double specLights(struct pointLS *lightSource, struct object3D *collisionObject,
 //Gets the smallest non-zero intersection lambda point for ray and all objects in the scene
 //by recursing through the object linked list
 void recurseObjectList(struct object3D *origination, struct object3D *item, double *lambda, struct ray3D *ray, 
-	struct point3D *p, struct point3D *n, double *a, double *b, struct object3D **intersectObject){
+	struct point3D *p, struct point3D *n, double *a, double *b, struct object3D **intersectObject, int ignoreLightSource){
 	if(item == NULL){//Exit if at end of object list
 		return;
 	} else if(item == origination){//Ignore the object if the ray originated from the object
-		recurseObjectList(origination, item->next, lambda, ray, p, n, a, b, intersectObject);
+		//printf("True\n");
+		recurseObjectList(origination, item->next, lambda, ray, p, n, a, b, intersectObject, ignoreLightSource);
 	} else {
 		double testLambda = -1;
 		struct point3D testP;
@@ -215,19 +296,23 @@ void recurseObjectList(struct object3D *origination, struct object3D *item, doub
 		double testA = 0;
 		double testB = 0;
 		item->intersect(item, ray, &testLambda, &testP, &testN, &testA, &testB);
+		//printf("TestLambda:%f\n", testLambda);
+		//printf(" %f,", testLambda);
 		if((testLambda >= 0) && (testLambda < *lambda || *lambda <= 0)){//Replace the current values if lambda is lower
-			*lambda = testLambda;
-			*p = testP;
-			*n = testN;
-			*a = testA;
-			*b = testB;
-			*intersectObject = item;
+			if(!(ignoreLightSource && item->isLightSource)){//Do not replace values if you ignore light sources and the collided object is a light source
+				*lambda = testLambda;
+				*p = testP;
+				*n = testN;
+				*a = testA;
+				*b = testB;
+				*intersectObject = item;
+			}
 		}
-		recurseObjectList(origination, item->next, lambda, ray, p, n, a, b, intersectObject);
+		recurseObjectList(origination, item->next, lambda, ray, p, n, a, b, intersectObject, ignoreLightSource);
 	}
 }
 
-void findFirstHit(struct ray3D *ray, double *lambda, struct object3D *Os, struct object3D **obj, struct point3D *p, struct point3D *n, double *a, double *b)
+void findFirstHit(struct ray3D *ray, double *lambda, struct object3D *Os, struct object3D **obj, struct point3D *p, struct point3D *n, double *a, double *b, int ignoreLightSource)
 {
 	
  // Find the closest intersection between the ray and any objects in the scene.
@@ -248,10 +333,22 @@ void findFirstHit(struct ray3D *ray, double *lambda, struct object3D *Os, struct
  // TO DO: Implement this function. See the notes for
  // reference of what to do in here
  /////////////////////////////////////////////////////////////
- recurseObjectList(Os, object_list, lambda, ray, p, n, a, b, obj);
+ //printf("Ray:");
+ recurseObjectList(Os, object_list, lambda, ray, p, n, a, b, obj, ignoreLightSource);
+ //printf("\n");
 }
 
-void rtShade(struct object3D *obj, struct point3D *p, struct point3D *n, struct ray3D *ray, int depth, double a, double b, struct colourRGB *col)
+//Bounds the value to a range of [min, max]
+void bound(double *value, double max, double min){
+	if(*value > max){
+		*value = max;
+	}
+	if(*value < min){
+		*value = min;
+	}
+}
+
+void rtShade(struct object3D *obj, struct point3D *p, struct point3D *n, struct ray3D *ray, int depth, double a, double b, struct colourRGB *col, struct objStack *	position)
 {
  // This function implements the shading model as described in lecture. It takes
  // - A pointer to the first object intersected by the ray (to get the colour properties)
@@ -266,14 +363,7 @@ void rtShade(struct object3D *obj, struct point3D *p, struct point3D *n, struct 
  // - The colour for this ray (using the col pointer)
  //
 
- struct colourRGB tmp_col;	// Accumulator for colour components
  double R,G,B;			// Colour for the object in R G and B
-
- // This will hold the colour as we process all the components of
- // the Phong illumination model
- tmp_col.R=0;
- tmp_col.G=0;
- tmp_col.B=0;
 
  if (obj->texImg==NULL)		// Not textured, use object colour
  {
@@ -294,28 +384,23 @@ void rtShade(struct object3D *obj, struct point3D *p, struct point3D *n, struct 
  //////////////////////////////////////////////////////////////
  //Calculates if a shadow exists
  double shadowConstant = shadowChecker(obj, p, n, light_list);
-
- struct colourRGB ambient; 
- struct colourRGB diffuse; 
- struct colourRGB specular;
- struct colourRGB Ispec = {.R = 0, .G = 0, .B = 0};
- struct colourRGB Irefr = {.R = 0, .G = 0, .B = 0};
+ //if(shadowConstant < 1 && shadowConstant > 0){
+	//printf("%f\n", shadowConstant);
+ // }
  
- ambient.R = R;
- ambient.G = G;
- ambient.B = B;
-
- diffuse.R = lightDots(light_list, obj, p, n, 1);
- diffuse.G = lightDots(light_list, obj, p, n, 2);
- diffuse.B = lightDots(light_list, obj, p, n, 3);
-
+ struct colourRGB ambient = {.R = R, .G = G, .B = B}; 
+ struct colourRGB diffuse = {.R = lightDots(light_list, obj, p, n, 1), 
+							.G = lightDots(light_list, obj, p, n, 2),
+							.B = lightDots(light_list, obj, p, n, 3)}; 
  struct point3D camCoord = ray->d;
  //Invert the direction of the ray to get the direction from the POI to the camera eye
  scalarMultVector(&camCoord, -1);
+ struct colourRGB specular = {.R = specLights(light_list, obj, p, n, 1, &camCoord), 
+								.G = specLights(light_list, obj, p, n, 2, &camCoord), 
+								.B = specLights(light_list, obj, p, n, 3, &camCoord)};
+ struct colourRGB Ispec = {.R = 0, .G = 0, .B = 0};
+ struct colourRGB Irefr = {.R = 0, .G = 0, .B = 0};
 
- specular.R = specLights(light_list, obj, p, n, 1, &camCoord);
- specular.G = specLights(light_list, obj, p, n, 2, &camCoord);
- specular.B = specLights(light_list, obj, p, n, 3, &camCoord);
  
  if(depth <= MAX_DEPTH){
 	//Check to see if the object has global specular reflection
@@ -335,31 +420,54 @@ void rtShade(struct object3D *obj, struct point3D *p, struct point3D *n, struct 
 		struct object3D *obj2 = object_list;
 		struct point3D p2;
 		struct point3D n2;
-		rayTrace(&refRay, depth+1, &Ispec, obj);
+		//printf("(%f,%f,%f)+(%f,%f,%f,%f)\n", refRay.p0.px, refRay.p0.py, refRay.p0.pz, refRay.d.px, refRay.d.py, refRay.d.pz, refRay.d.pw);
+		//printf("Reflection\n");
+		rayTrace(&refRay, depth+1, &Ispec, obj, position);
 	}
 	
-	//Implement refraction when refractive coefficient exists
-	//For now refractive component is always 0
+	//Implement refraction if object is not opaque and the refractive component is not 0
+	if(obj->alb.rt > 0 && obj->alpha < 1){
+		//printf("(%f,%f,%f)+(%f,%f,%f)\n", ray->p0.px, ray->p0.py, ray->p0.pz, ray->d.px, ray->d.py, ray->d.pz);
+		double c = dot(n,&ray->d);
+		double n1 = peek(position);
+		double n2 = 0;
+		if(c < 0){
+			//printf("in\n");
+			n2 = obj->r_index;
+			push(position, n2);
+		} else{
+			//printf("out\n");
+			pop(position);
+			n2 = peek(position);
+		}
+		//printf("Indexes: n1=%f, n2=%f", n1, n2);
+		//printf("Normal: (%f,%f,%f)\n", n->px, n->py, n->pz);
+		//Refracted ray direction = r*ray->d + (rc - n*sqrt(1 - (r^2)*(1 - (c^2))))n
+		double r = n1/n2;
+		double directionConstant = r*c - sqrt(1 - r*r*(1 - c*c));
+		struct point3D b = ray->d;
+		struct point3D nom = *n;
+		scalarMultVector(&nom, directionConstant);
+		scalarMultVector(&b, r);
+		addVectors(&nom, &b);
+		b.pw = 0;
+		struct ray3D refractedRay;
+		initRay(&refractedRay, p, &b);
+		rayTrace(&refractedRay, depth+1, &Irefr, NULL, position);
+		if(c < 0){
+			pop(position);
+		}
+	}
  }
  
  // Be sure to update 'col' with the final colour computed here!
  //Change number to change what components the output uses. Refer to colorCalc to see values and outcomes
- colorCalc(col, &ambient, &diffuse, &specular, shadowConstant, &Ispec, &Irefr, n, obj, 7);
+ colorCalc(col, &ambient, &diffuse, &specular, shadowConstant, &Ispec, &Irefr, n, obj, 8);
  return;
 
 }
 
-//Bounds the value to a range of [min, max]
-void bound(double *value, double max, double min){
-	if(*value > max){
-		*value = max;
-	}
-	if(*value < min){
-		*value = min;
-	}
-}
-
-void rayTrace(struct ray3D *ray, int depth, struct colourRGB *col, struct object3D *Os)
+void rayTrace(struct ray3D *ray, int depth, struct colourRGB *col, struct object3D *Os, struct objStack *position)
 {
  // Trace one ray through the scene.
  //
@@ -387,15 +495,20 @@ void rayTrace(struct ray3D *ray, int depth, struct colourRGB *col, struct object
   col->B=-1;
   return;
  }
+
+ col->R=0;
+ col->G=0;
+ col->B=0;
  
  ///////////////////////////////////////////////////////
  // TO DO: Complete this function. Refer to the notes
  // if you are unsure what to do here.
  ///////////////////////////////////////////////////////
 
- findFirstHit(ray, &lambda, Os, &obj, &p, &n, &a, &b);
+ findFirstHit(ray, &lambda, Os, &obj, &p, &n, &a, &b, 0);
+ //printf("Depth:%d, Lambda:%f\n", depth, lambda);
  if(lambda > 0){
-	rtShade(obj, &p, &n, ray, depth, a, b, col);
+	rtShade(obj, &p, &n, ray, depth, a, b, col, position);
 	bound(&col->R, 1, 0);
 	bound(&col->G, 1, 0);
 	bound(&col->B, 1, 0);
@@ -419,6 +532,80 @@ void printMatrices(struct object3D *o_list){
 	printMatrices(o_list->next);
 }
 
+struct multiThreadInput{
+	struct view *cam;
+	struct image *im;
+	int antialiasing;
+	unsigned char *rgbIm;
+	double du;
+	double dv;
+	int threadNumber;
+	int sx;
+	struct point3D e;
+};
+
+void *computeRay(void *input){
+	struct multiThreadInput *args = (multiThreadInput *)input;
+	for(int x = args->threadNumber ; x< args->sx*args->sx; x = x + NUM_THREADS){
+		int i = x%args->sx;
+		int j = x/args->sx;
+		struct colourRGB col;
+		if(!args->antialiasing){
+			struct point3D coords = {.px = args->cam->wl + i*args->du, .py = args->cam->wt + j*args->dv, .pz = args->cam->f, .pw = 1};
+	
+			//Turn camera coordinates into world coordinates for the pixel
+			matVecMult(args->cam->C2W, &coords);
+	
+			//Get the direction of the ray by subtracting the pixel coords by camera in world coords
+			struct point3D directs = coords;
+	
+			//a = e, b = directs, directs = directs - e
+			subVectors(&args->e, &directs);
+			normalize(&directs);
+			struct ray3D pixelRay;
+			initRay(&pixelRay, &coords, &directs);
+			//Set direction pw to 0 to prevent matrix multiplication of inverse transformation from transforming the direction matrix
+			pixelRay.d.pw = 0;
+			rayTrace(&pixelRay, 1, &col, NULL, NULL);
+		} else{
+			struct colourRGB colACC = {.R = 0, .G = 0, .B = 0};
+			for(int k = 0; k < AANumber; k++){
+				struct colourRGB colTemp;
+				double randx = (double)rand()/(double)RAND_MAX;
+				double randy = (double)rand()/(double)RAND_MAX;
+				struct point3D coords = {.px = args->cam->wl +(i+randx)*args->du, .py = args->cam->wt + (j+randy)*args->dv, .pz = args->cam->f, .pw = 1};
+				//Turn camera coordinates into world coordinates for the pixel
+				matVecMult(args->cam->C2W, &coords);
+	
+				//Get the direction of the ray by subtracting the pixel coords by camera in world coords
+				struct point3D directs = coords;
+	
+				//a = e, b = directs, directs = directs - e
+				subVectors(&args->e, &directs);
+				normalize(&directs);
+				struct ray3D pixelRay;
+				initRay(&pixelRay, &coords, &directs);
+				//Set direction pw to 0 to prevent matrix multiplication of inverse transformation from transforming the direction matrix
+				pixelRay.d.pw = 0;
+				rayTrace(&pixelRay, 1, &colTemp, NULL, NULL);
+				colACC.R += colTemp.R;
+				colACC.G += colTemp.G;
+				colACC.B += colTemp.B;
+			}
+			col.R = colACC.R/AANumber;
+			col.G = colACC.G/AANumber;
+			col.B = colACC.B/AANumber;
+		}
+		//printf("Write_%d\n", args->j*args->sx + args->i);
+		(*(args->rgbIm+((i+(j*args->sx))*3)+0))=(int)(255*col.R);
+		(*(args->rgbIm+((i+(j*args->sx))*3)+1))=(int)(255*col.G);
+		(*(args->rgbIm+((i+(j*args->sx))*3)+2))=(int)(255*col.B);
+	}
+	//printf("Done_%d\n", args->j*args->sx + args->i);
+	pthread_exit(NULL);
+	return NULL;
+}
+
 int main(int argc, char *argv[])
 {
  // Main function for the raytracer. Parses input parameters,
@@ -428,10 +615,11 @@ int main(int argc, char *argv[])
  struct view *cam;	// Camera and view for this scene
  int sx;		// Size of the raytraced image
  int antialiasing;	// Flag to determine whether antialiaing is enabled or disabled
- char output_name[1024];	// Name of the output file for the raytraced .ppm image
+ int multithreading; // Flah to determine whether multithreading is enabled or disabled
  struct point3D e;		// Camera view parameters 'e', 'g', and 'up'
  struct point3D g;
  struct point3D up;
+ char output_name[1024];	// Name of the output file for the raytraced .ppm image
  double du, dv;			// Increase along u and v directions for pixel coordinates
  struct point3D pc,d;		// Point structures to keep the coordinates of a pixel and
 				// the direction or a ray
@@ -441,25 +629,31 @@ int main(int argc, char *argv[])
  int i,j;			// Counters for pixel coordinates
  unsigned char *rgbIm;
 
- if (argc<5)
+ clock_gettime(CLOCK_MONOTONIC, &start);
+
+ if (argc<6)
  {
   fprintf(stderr,"RayTracer: Can not parse input parameters\n");
   fprintf(stderr,"USAGE: RayTracer size rec_depth antialias output_name\n");
   fprintf(stderr,"   size = Image size (both along x and y)\n");
   fprintf(stderr,"   rec_depth = Recursion depth\n");
   fprintf(stderr,"   antialias = A single digit, 0 disables antialiasing. Anything else enables antialiasing\n");
+  fprintf(stderr,"   multithreading = A single digit, 0 disables multithreading. Anything else enables multithreading\n");
   fprintf(stderr,"   output_name = Name of the output file, e.g. MyRender.ppm\n");
   exit(0);
- }
+}
  sx=atoi(argv[1]);
  MAX_DEPTH=atoi(argv[2]);
  if (atoi(argv[3])==0) antialiasing=0; else antialiasing=1;
- strcpy(&output_name[0],argv[4]);
+ if (atoi(argv[4])==0) multithreading=0; else multithreading=1;
+ strcpy(&output_name[0],argv[5]);
 
  fprintf(stderr,"Rendering image at %d x %d\n",sx,sx);
  fprintf(stderr,"Recursion depth = %d\n",MAX_DEPTH);
  if (!antialiasing) fprintf(stderr,"Antialising is off\n");
  else fprintf(stderr,"Antialising is on\n");
+ if (!multithreading) fprintf(stderr,"Multithreading is off\n");
+ else fprintf(stderr,"Multithreading is on\n");
  fprintf(stderr,"Output file name: %s\n",output_name);
 
  object_list=NULL;
@@ -526,7 +720,7 @@ int main(int argc, char *argv[])
  if (cam==NULL)
  {
   fprintf(stderr,"Unable to set up the view and camera parameters. Our of memory!\n");
-  cleanup(object_list,light_list, texture_list);
+  cleanup(object_list,light_list,texture_list);
   deleteImage(im);
   exit(0);
  }
@@ -558,60 +752,114 @@ int main(int argc, char *argv[])
  //fprintf(stderr,"World to camera conversion matrix:\n");
  //printmatrix(cam->W2C);
  //fprintf(stderr,"\n");
- struct point3D direction = {.px = 0,.py = 0, .pz = 1, .pw = 0};
- struct point3D point = { .px = 0, .py = 0, .pz = 1, .pw = 1};
- struct ray3D rayz;
- initRay(&rayz, &point, &direction);
- double l, as, bs;
- struct object3D *object = object_list;
- struct point3D pont, norm;
- //cylIntersect(object_list, &rayz, &l, &pont, &norm, &as, &bs);
- //findFirstHit(&rayz, &l, NULL, &object, &pont, &norm, &as, &bs);
- //printf("Lambda of (%f,%f,%f)(%f,%f,%f) = %f\n", point.px, point.py, point.pz, direction.px, direction.py, direction.pz, l);
-
- //fprintf(stderr,"Rendering row: ");
- for (j=0;j<sx;j++)		// For each of the pixels in the image
- {
-  //fprintf(stderr,"%d/%d, ",j,sx);
-  for (i=0;i<sx;i++)
-  {
-    ///////////////////////////////////////////////////////////////////
-    // TO DO - complete the code that should be in this loop to do the
-    //         raytracing!
-    ///////////////////////////////////////////////////////////////////
-	//Camera coordinates for the pixel
-	struct point3D coords = {.px = cam->wl +i*du, .py = cam->wt + j*dv, .pz = cam->f, .pw = 1};
+ 
+ //Structure to test single intersection points for implicit surfaces
+ //struct point3D direction = {.px = 0,.py = 0, .pz = 1, .pw = 0};
+ //struct point3D point = { .px = 0, .py = 0, .pz = 1, .pw = 1};
+ //struct ray3D rayz;
+ //initRay(&rayz, &point, &direction);
+ //double l, as, bs;
+ //struct object3D *object = object_list;
+ //struct point3D pont, norm;
+ //implicitIntersect(object, &rayz, &l, &pont, &norm, &as, &bs);
+ //printf("Lambda:%f\n", l);
+ 
+ if(multithreading){
+	pthread_t somethreads[NUM_THREADS];
+	struct multiThreadInput mtargs[NUM_THREADS];
+	//fprintf(stderr,"Rendering row: ");
+	for(int i = 0; i < NUM_THREADS; i++){
+		mtargs[i].cam = cam;
+		mtargs[i].im = im;
+		mtargs[i].antialiasing = antialiasing;
+		mtargs[i].rgbIm = rgbIm;
+		mtargs[i].du = du;
+		mtargs[i].dv = dv;
+		mtargs[i].e = e;
+		mtargs[i].threadNumber = i;
+		mtargs[i].sx = sx;
+		if(pthread_create(&somethreads[i], NULL, &computeRay, (void *)&mtargs[i]) != 0){ // Create threads for 1 row of the image
+			printf("Bad news, you need to be able to initialize %d consecutive threads at a time", sx);
+			break;
+		}
+	}
+	for (int j=0;j<NUM_THREADS;j++)		// For each of the pixels in the image
+	{
+		pthread_join(somethreads[j], NULL);
+	} // end for j
+ } else{
+	for(int j = 0; j < sx; j++){
+		for(int i= 0; i< sx; i++){
+			if(!antialiasing){
+			struct point3D coords = {.px = cam->wl + i*du, .py = cam->wt + j*dv, .pz = cam->f, .pw = 1};
 	
-	//Turn camera coordinates into world coordinates for the pixel
-	matVecMult(cam->C2W, &coords);
+			//Turn camera coordinates into world coordinates for the pixel
+			matVecMult(cam->C2W, &coords);
 	
-	//Get the direction of the ray by subtracting the pixel coords by camera in world coords
-	struct point3D directs = coords;
+			//Get the direction of the ray by subtracting the pixel coords by camera in world coords
+			struct point3D directs = coords;
 	
-	//a = e, b = directs, directs = directs - e
-	subVectors(&e, &directs);
-	normalize(&directs);
-	struct ray3D pixelRay;
-	initRay(&pixelRay, &coords, &directs);
-	//Set direction pw to 0 to prevent matrix multiplication of inverse transformation from transforming the direction matrix
-	pixelRay.d.pw = 0;
-	rayTrace(&pixelRay, 1, &col, NULL);
-	(*(rgbIm+((i+(j*sx))*3)+0))=(int)(255*col.R);
-	(*(rgbIm+((i+(j*sx))*3)+1))=(int)(255*col.G);
-	(*(rgbIm+((i+(j*sx))*3)+2))=(int)(255*col.B); 
+			//a = e, b = directs, directs = directs - e
+			subVectors(&e, &directs);
+			normalize(&directs);
+			struct ray3D pixelRay;
+			initRay(&pixelRay, &coords, &directs);
+			//Set direction pw to 0 to prevent matrix multiplication of inverse transformation from transforming the direction matrix
+			pixelRay.d.pw = 0;
+			rayTrace(&pixelRay, 1, &col, NULL, NULL);
+		} else{
+			struct colourRGB colACC = {.R = 0, .G = 0, .B = 0};
+			for(int k = 0; k < AANumber; k++){
+				struct colourRGB colTemp;
+				double randx = (double)rand()/(double)RAND_MAX;
+				double randy = (double)rand()/(double)RAND_MAX;
+				struct point3D coords = {.px = cam->wl +(i+randx)*du, .py = cam->wt + (j+randy)*dv, .pz = cam->f, .pw = 1};
+				//Turn camera coordinates into world coordinates for the pixel
+				matVecMult(cam->C2W, &coords);
 	
-  } // end for i
- } // end for j
+				//Get the direction of the ray by subtracting the pixel coords by camera in world coords
+				struct point3D directs = coords;
+	
+				//a = e, b = directs, directs = directs - e
+				subVectors(&e, &directs);
+				normalize(&directs);
+				struct ray3D pixelRay;
+				initRay(&pixelRay, &coords, &directs);
+				//Set direction pw to 0 to prevent matrix multiplication of inverse transformation from transforming the direction matrix
+				pixelRay.d.pw = 0;
+				if(j == 512 && i == 461){
+					printf("Ray:(%f,%f,%f)(%f,%f,%f)\n", pixelRay.p0.px, pixelRay.p0.py, pixelRay.p0.pz, pixelRay.d.px, pixelRay.d.py,pixelRay.d.pz);
+				}
+				rayTrace(&pixelRay, 1, &colTemp, NULL, NULL);
+				colACC.R += colTemp.R;
+				colACC.G += colTemp.G;
+				colACC.B += colTemp.B;
+			}
+			col.R = colACC.R/AANumber;
+			col.G = colACC.G/AANumber;
+			col.B = colACC.B/AANumber;
+		}
+			//printf("R: %f,G: %f,B: %f\n", col.R, col.G, col.B);
+			(*(rgbIm+((i+(j*sx))*3)+0))=(int)(255*col.R);
+			(*(rgbIm+((i+(j*sx))*3)+1))=(int)(255*col.G);
+			(*(rgbIm+((i+(j*sx))*3)+2))=(int)(255*col.B);
+			//printf("Row %d Col %d Done\n", j, i);
+		}
+			printf("Row %d Done\n", j);
+	}
+ }
+	
+	clock_gettime(CLOCK_MONOTONIC, &end);
+	elapsed = (end.tv_sec - start.tv_sec);
+	printf("Job finished in %f seconds\n", elapsed);
 
- fprintf(stderr,"\nDone!\n");
+	// Output rendered image
+	imageOutput(im,output_name);
 
- // Output rendered image
- imageOutput(im,output_name);
-
- // Exit section. Clean up and return.
- cleanup(object_list,light_list,texture_list);		// Object, light, and texture lists
- deleteImage(im);					// Rendered image
- free(cam);						// camera view
- exit(0);
+	// Exit section. Clean up and return.
+	cleanup(object_list,light_list,texture_list);		// Object, light, and texture lists
+	deleteImage(im);					// Rendered image
+	free(cam);						// camera view
+	exit(0);
 }
 
